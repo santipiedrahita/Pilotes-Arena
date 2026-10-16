@@ -1,11 +1,12 @@
 """Motor de cálculo: capacidad portante y asentamiento de un pilote individual en arenas.
 
-Sigue exactamente el mismo procedimiento del Excel "Capacidad_Portante_Pilote_v8.xlsx":
+Sigue exactamente el mismo procedimiento del Excel "Capacidad_Portante_Pilote_v9.xlsx":
   1. Fuste por estratos, solo hasta Lf = mín(L, 15D), con 5 métodos:
      pág. 117 (Mohr-Coulomb), α, β, λ y ρ (NSR-98 H.4.1.5.3, con Nq y Nc de Janbu).
   2. Punta en z = L con 4 métodos: Terzaghi, Meyerhof, Meyerhof simplificado y NSR-98 H.4-6 (Janbu).
   3. Qadm = Qp/FSp + Qs/FSs; si Qu/Qadm < FS mínimo → Qadm = Qu/FS mínimo.
-  4. Asentamiento de pilote por punta (Poulos y Davis): δ = P·I/(Es·d), I = I0·RK·Rb·Rν.
+  4. Asentamiento de pilote por punta (Poulos y Davis): δ0 = P·I/(Es·d), I = I0·RK·Rb·Rν.
+  5. Asentamiento en la masa de suelos subyacente: δ = δ0 + (P/L)·Σ (Ij − Ij+1)/Esj (Mindlin).
 
 Unidades: kN, m, kPa.
 """
@@ -358,6 +359,38 @@ def asentamiento(d: Datos, prf, P, k_punta):
 
 
 # ---------------------------------------------------------------------------
+# 5. Asentamiento en la masa de suelos subyacente (Mindlin, Fig. 5.35)
+# ---------------------------------------------------------------------------
+def mindlin_ip(zeta, nu):
+    """Factor de influencia Ip bajo el eje del pilote (Mindlin, carga puntual a 2L/3), ζ = H/L."""
+    a = 2.0 / 3.0
+    return (1 + nu) / (2 * math.pi * (1 - nu)) * ((1 - nu) / (zeta - a) + 2 * (1 - nu) ** 2 / (zeta + a)
+                                                 + a * zeta / (zeta + a) ** 3)
+
+
+def subyacente(d: Datos, prf, P, k_punta, delta0_mm):
+    """δ = δ0 + (P/L)·Σ (Ij − Ij+1)/Esj para los estratos completamente debajo del estrato de la punta.
+
+    Bajo el último estrato del perfil se supone material incompresible (Im/Esm = 0).
+    """
+    filas, suma = [], 0.0
+    for k, f in enumerate(prf):
+        e = f["estrato"]
+        es_sub = (k + 1) > k_punta and e.espesor > 0
+        fila = dict(n=k + 1, techo=f["techo"], base=f["base"], sub=es_sub)
+        if es_sub:
+            z1, z2 = f["techo"] / d.L, f["base"] / d.L
+            I1, I2 = mindlin_ip(z1, e.nu), mindlin_ip(z2, e.nu)
+            aporte = (I1 - I2) / e.E
+            suma += aporte
+            fila.update(z1=z1, z2=z2, nu=e.nu, I1=I1, I2=I2, E=e.E, aporte=aporte)
+        filas.append(fila)
+    dsub_mm = P / d.L * suma * 1000
+    return dict(filas=filas, suma=suma, P=P, L=d.L, dsub_mm=dsub_mm, delta0_mm=delta0_mm,
+                total_mm=delta0_mm + dsub_mm)
+
+
+# ---------------------------------------------------------------------------
 # Cálculo completo
 # ---------------------------------------------------------------------------
 def validar(d: Datos):
@@ -403,12 +436,14 @@ def calcular(d: Datos):
                    for pm in METODOS_PUNTA}
     P = d.P if d.P is not None else adm["Qadm"]
     ase = asentamiento(d, prf, P, pu["estrato"])
+    sub = subyacente(d, prf, P, pu["estrato"], ase["delta_mm"])
     return dict(perfil=prf, fuste=fu, punta=pu, Qs=Qs_sel, Qp=Qp_sel, adm=adm,
-                matriz_Qu=matriz_Qu, matriz_Qadm=matriz_Qadm, asentamiento=ase)
+                matriz_Qu=matriz_Qu, matriz_Qadm=matriz_Qadm, asentamiento=ase, subyacente=sub)
 
 
 if __name__ == "__main__":
     r = calcular(ejemplo())
     print("Qs:", {k: round(v, 2) for k, v in r["fuste"]["Qs"].items()})
     print("Qp:", {k: round(v["Qp"], 2) for k, v in r["punta"]["metodos"].items()})
-    print("Qadm:", round(r["adm"]["Qadm"], 2), " δ (mm):", round(r["asentamiento"]["delta_mm"], 3))
+    print("Qadm:", round(r["adm"]["Qadm"], 2), " δ0 (mm):", round(r["asentamiento"]["delta_mm"], 3),
+          " δ total (mm):", round(r["subyacente"]["total_mm"], 3))

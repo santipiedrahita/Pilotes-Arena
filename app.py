@@ -1,7 +1,7 @@
 """Aplicación Streamlit: capacidad portante y asentamiento de un pilote individual en arenas.
 
 Ejecutar con:   streamlit run app.py
-Usa los mismos métodos y criterios del Excel "Capacidad_Portante_Pilote_v8.xlsx".
+Usa los mismos métodos y criterios del Excel "Capacidad_Portante_Pilote_v9.xlsx".
 """
 import io
 import math
@@ -173,6 +173,7 @@ if errores:
 
 R = C.calcular(datos)
 FU, PU, ADM, ASE = R["fuste"], R["punta"], R["adm"], R["asentamiento"]
+SUB = R["subyacente"]
 
 
 # ---- Perfil del suelo (gráfico) + tabla calculada
@@ -238,7 +239,8 @@ m2.metric(f"Qp · {metodo_punta}", f"{R['Qp']:,.1f} kN")
 m3.metric("Qu = Qp + Qs", f"{ADM['Qu']:,.1f} kN")
 m4.metric("Qadm", f"{ADM['Qadm']:,.1f} kN",
           help="Qp/FSp + Qs/FSs, o Qu/FS mínimo si el FS global resulta menor")
-m5.metric("Asentamiento δ", f"{ASE['delta_mm']:.2f} mm", help=f"Con P = {ASE['P']:,.1f} kN")
+m5.metric("Asentamiento total δ", f"{SUB['total_mm']:.2f} mm",
+          help=f"δ0 (Poulos y Davis) + masa de suelos subyacente, con P = {ASE['P']:,.1f} kN")
 
 t_fu, t_pu, t_adm, t_ase, t_gr, t_ec = st.tabs(
     ["Fuste", "Punta", "Carga admisible", "Asentamiento", "Gráficas", "Ecuaciones"])
@@ -385,7 +387,32 @@ with t_ase:
     r1, r2, r3 = st.columns(3)
     r1.metric("I = I0·RK·Rb·Rν", f"{ASE['I']:.4f}")
     r2.metric("δ = P·I/(Es·d)", f"{ASE['delta_m']:.5f} m")
-    r3.metric("Asentamiento δ", f"{ASE['delta_mm']:.2f} mm")
+    r3.metric("δ0 (pilote)", f"{ASE['delta_mm']:.2f} mm")
+
+    st.markdown("#### Asentamiento en la masa de suelos subyacente (Mindlin, Fig. 5.35)")
+    st.latex(r"\delta=\delta_0+\frac{P}{L}\sum_{j}\frac{I_j-I_{j+1}}{E_{sj}}\qquad "
+             r"I_p=\frac{1+\nu}{2\pi(1-\nu)}\left[\frac{1-\nu}{\zeta-2/3}+\frac{2(1-\nu)^2}{\zeta+2/3}"
+             r"+\frac{2}{3}\frac{\zeta}{(\zeta+2/3)^3}\right]\qquad \zeta=\frac{H}{L}")
+    st.caption("δ0 es el asentamiento de Poulos y Davis (1ª camada: de la superficie a la base del estrato de la "
+               "punta). Ij se evalúa en el techo y Ij+1 en la base de cada estrato que queda completamente debajo "
+               "del estrato de la punta. Bajo el último estrato del perfil se supone material incompresible "
+               "(Im/Esm = 0).")
+    fs_sub = [f for f in SUB["filas"] if f["sub"]]
+    if fs_sub:
+        st.dataframe(pd.DataFrame([{
+            "Estrato": f["n"], "Techo Hj (m)": f["techo"], "Base Hj+1 (m)": f["base"], "ζ = Hj/L": f["z1"],
+            "ζ = Hj+1/L": f["z2"], "νs": f["nu"], "Ij": f["I1"], "Ij+1": f["I2"], "Esj (kPa)": f["E"],
+            "(Ij − Ij+1)/Esj (1/kPa)": f["aporte"]} for f in fs_sub]).style.format(
+            {"Techo Hj (m)": "{:.2f}", "Base Hj+1 (m)": "{:.2f}", "ζ = Hj/L": "{:.3f}", "ζ = Hj+1/L": "{:.3f}",
+             "νs": "{:.2f}", "Ij": "{:.4f}", "Ij+1": "{:.4f}", "Esj (kPa)": "{:,.0f}",
+             "(Ij − Ij+1)/Esj (1/kPa)": "{:.3e}"}), hide_index=True)
+    else:
+        st.info(f"No hay estratos debajo del estrato de la punta (estrato {PU['estrato']}), así que δ subyacente = 0. "
+                "Para tenerlos en cuenta, agregue en la estratigrafía los estratos que hay bajo ese estrato.")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("δ0 (pilote)", f"{SUB['delta0_mm']:.3f} mm")
+    s2.metric("δ subyacente = (P/L)·Σ", f"{SUB['dsub_mm']:.3f} mm")
+    s3.metric("Asentamiento total δ", f"{SUB['total_mm']:.2f} mm")
 
 
 # ---------------------------------------------------------------- GRÁFICAS
@@ -476,7 +503,8 @@ def excel_resultados():
         pd.DataFrame([("P (kN)", ASE["P"]), ("Es (kPa)", ASE["Es"]), ("νs", ASE["nus"]), ("Eb (kPa)", ASE["Eb"]),
                       ("L/d", ASE["LD"]), ("K", ASE["K"]), ("Eb/Es", ASE["EbEs"]),
                       *[(f"{k} (usado)", v) for k, v in ASE["usado"].items()],
-                      ("I", ASE["I"]), ("δ (mm)", ASE["delta_mm"])],
+                      ("I", ASE["I"]), ("δ0 (mm)", ASE["delta_mm"]),
+                      ("δ subyacente (mm)", SUB["dsub_mm"]), ("δ total (mm)", SUB["total_mm"])],
                      columns=["Parámetro", "Valor"]).to_excel(xw, sheet_name="Asentamiento", index=False)
     return buf.getvalue()
 
