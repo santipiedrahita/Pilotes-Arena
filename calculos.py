@@ -1,6 +1,6 @@
 """Motor de cálculo: capacidad portante y asentamiento de un pilote individual en arenas.
 
-Sigue exactamente el mismo procedimiento del Excel "Capacidad_Portante_Pilote_v6.xlsx":
+Sigue exactamente el mismo procedimiento del Excel "Capacidad_Portante_Pilote_v8.xlsx":
   1. Fuste por estratos, solo hasta Lf = mín(L, 15D), con 5 métodos:
      pág. 117 (Mohr-Coulomb), α, β, λ y ρ (NSR-98 H.4.1.5.3, con Nq y Nc de Janbu).
   2. Punta en z = L con 4 métodos: Terzaghi, Meyerhof, Meyerhof simplificado y NSR-98 H.4-6 (Janbu).
@@ -49,7 +49,8 @@ class Estrato:
 @dataclass
 class Datos:
     # Pilote y sitio
-    D: float = 0.40
+    D: float = 0.40                  # diámetro D (circular) o lado B (cuadrada)
+    forma: str = "Circular"          # "Circular" | "Cuadrada"
     L: float = 12.0
     tipo: str = "Hincado"            # "Hincado" | "Preexcavado"
     NF: float = 4.0
@@ -74,15 +75,20 @@ class Datos:
     # Derivados ------------------------------------------------------------
     @property
     def Ap(self):
-        return math.pi * self.D ** 2 / 4
+        return self.D ** 2 if self.forma == "Cuadrada" else math.pi * self.D ** 2 / 4
 
     @property
     def perimetro(self):
-        return math.pi * self.D
+        return 4 * self.D if self.forma == "Cuadrada" else math.pi * self.D
 
     @property
     def Lf(self):
         return min(self.L, 15 * self.D)
+
+    @property
+    def d_asentamiento(self):
+        """Diámetro para Poulos y Davis: D, o el diámetro equivalente de igual área si es cuadrada."""
+        return math.sqrt(4 * self.Ap / math.pi) if self.forma == "Cuadrada" else self.D
 
     @property
     def ks_K0_usado(self):
@@ -165,8 +171,10 @@ def perfil(d: Datos):
         base = techo + e.espesor
         h_seco = max(0.0, min(base, d.NF) - techo)
         h_sat = (base - techo) - h_seco
-        filas.append(dict(estrato=e, techo=techo, base=base, h_seco=h_seco, h_sat=h_sat, sv_techo=sv_techo))
-        sv_techo += e.gamma * h_seco + (e.gamma_sat - d.gamma_w) * h_sat
+        sv_base = sv_techo + e.gamma * h_seco + (e.gamma_sat - d.gamma_w) * h_sat
+        filas.append(dict(estrato=e, techo=techo, base=base, h_seco=h_seco, h_sat=h_sat,
+                          sv_techo=sv_techo, sv_base=sv_base))
+        sv_techo = sv_base
         techo = base
     return filas
 
@@ -251,13 +259,14 @@ def punta(d: Datos, prf):
     sv = sigma_v(d, f, d.L)
     Ks = (1 - math.sin(math.radians(phi))) * math.sqrt(e.ocr)
     B2 = d.D / 2
+    cg = 0.8 if d.forma == "Cuadrada" else 0.6   # Terzaghi: base cuadrada o circular
     gen = d.falla_terzaghi == "General"
     res = {}
     # Terzaghi
     Nc, Nq, Ng = (factor("Nc_Tg" if gen else "Nc_Tl", phi), factor("Nq_Tg" if gen else "Nq_Tl", phi),
                   factor("Ng_Tg" if gen else "Ng_Tl", phi))
-    res["Terzaghi"] = dict(Nc=Nc, Nq=Nq, Ng=Ng, qp=1.2 * c * Nc + sv * Nq + 0.6 * g * B2 * Ng,
-                           ecuacion="qp = 1.2·c·Nc + σ'v·Nq + 0.6·γ·(B/2)·Nγ")
+    res["Terzaghi"] = dict(Nc=Nc, Nq=Nq, Ng=Ng, qp=1.2 * c * Nc + sv * Nq + cg * g * B2 * Ng,
+                           ecuacion=f"qp = 1.2·c·Nc + σ'v·Nq + {cg}·γ·(B/2)·Nγ")
     # Meyerhof
     Nc, Nq, Ng = factor("Npc", phi), factor("Npq", phi), factor("Npg", phi)
     res["Meyerhof"] = dict(Nc=Nc, Nq=Nq, Ng=Ng, qp=c * Nc + sv * Nq + g * B2 * Ng,
@@ -305,8 +314,9 @@ def asentamiento(d: Datos, prf, P, k_punta):
     Es = sEh / sh
     nus = sNh / sh
     Eb = prf[k_punta - 1]["estrato"].E
-    RA = d.Ap / (math.pi * d.D ** 2 / 4)
-    LD = d.L / d.D
+    dd = d.d_asentamiento
+    RA = d.Ap / (math.pi * dd ** 2 / 4)
+    LD = d.L / dd
     K = d.Ep * RA / Es
     EbEs = Eb / Es
 
@@ -342,8 +352,8 @@ def asentamiento(d: Datos, prf, P, k_punta):
     grafica = {"I0": I0, "RK": RK, "Rb": Rb, "Rν": Rv}
     usado = {k: (d.manual.get(k) if d.manual.get(k) not in (None, 0) else v) for k, v in grafica.items()}
     I = usado["I0"] * usado["RK"] * usado["Rb"] * usado["Rν"]
-    delta = P * I / (Es * d.D)
-    return dict(tramos=tramos, Es=Es, nus=nus, Eb=Eb, RA=RA, LD=LD, K=K, EbEs=EbEs,
+    delta = P * I / (Es * dd)
+    return dict(tramos=tramos, d=dd, Es=Es, nus=nus, Eb=Eb, RA=RA, LD=LD, K=K, EbEs=EbEs,
                 grafica=grafica, usado=usado, I=I, P=P, delta_m=delta, delta_mm=delta * 1000)
 
 

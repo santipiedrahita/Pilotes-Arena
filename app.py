@@ -1,7 +1,7 @@
 """Aplicación Streamlit: capacidad portante y asentamiento de un pilote individual en arenas.
 
 Ejecutar con:   streamlit run app.py
-Usa los mismos métodos y criterios del Excel "Capacidad_Portante_Pilote_v6.xlsx".
+Usa los mismos métodos y criterios del Excel "Capacidad_Portante_Pilote_v8.xlsx".
 """
 import io
 import math
@@ -50,7 +50,12 @@ sb = st.sidebar
 sb.header("Datos de entrada")
 
 sb.subheader("Pilote y sitio")
-D = sb.number_input("Diámetro, D (m)", 0.05, 5.0, 0.40, 0.05, format="%.2f")
+forma = sb.selectbox("Forma de la sección", ["Circular", "Cuadrada"],
+                     help="Cuadrada: Ap = B², perímetro = 4B, Terzaghi con 0.8·γ·(B/2)·Nγ y, en el asentamiento, "
+                          "diámetro equivalente de igual área d = √(4B²/π).")
+D = sb.number_input("Diámetro, D (m)" if forma == "Circular" else "Lado, B (m)", 0.05, 5.0, 0.40, 0.05,
+                    format="%.2f")
+d15 = "15D" if forma == "Circular" else "15B"
 L = sb.number_input("Longitud embebida, L (m)", 0.5, 100.0, 12.0, 0.5, format="%.2f")
 tipo = sb.selectbox("Tipo de pilote", ["Hincado", "Preexcavado"])
 NF = sb.number_input("Profundidad del nivel freático, NF (m)", 0.0, 500.0, 4.0, 0.5, format="%.2f",
@@ -153,7 +158,7 @@ for _, f in editado.iterrows():
         E=num(f["E (kPa)"]), nu=num(f["ν"], 0.3)))
 
 manual = {k: st.session_state.get(f"man_{k}") for k in ["I0", "RK", "Rb", "Rν"]}
-datos = C.Datos(D=D, L=L, tipo=tipo, NF=NF, gamma_w=gw, FSp=FSp, FSs=FSs, FS_min=FSmin,
+datos = C.Datos(D=D, forma=forma, L=L, tipo=tipo, NF=NF, gamma_w=gw, FSp=FSp, FSs=FSs, FS_min=FSmin,
                 metodo_fuste=metodo_fuste, metodo_punta=metodo_punta, falla_terzaghi=falla,
                 ca_c=ca_c, ks_K0=ks_K0, factor_tan=factor_tan, coef_rho=coef_rho,
                 Ep=Ep, P=P_manual, manual=manual, estratos=estratos)
@@ -194,7 +199,7 @@ def grafico_perfil():
         y=alt.Y("techo:Q", scale=alt.Scale(domain=ydom)), y2="base:Q",
         tooltip=[alt.Tooltip("base:Q", title="L (m)")])
     lin = pd.DataFrame([dict(y=NF, et=f"NF = {NF:g} m", c="#2a78d6"),
-                        dict(y=datos.Lf, et=f"Lf = mín(L, 15D) = {datos.Lf:g} m", c="#eb6834")])
+                        dict(y=datos.Lf, et=f"Lf = mín(L, {d15}) = {datos.Lf:g} m", c="#eb6834")])
     lin = lin[lin["y"] <= ydom[0]]
     reglas = alt.Chart(lin).mark_rule(strokeDash=[6, 4], strokeWidth=2).encode(
         y=alt.Y("y:Q", scale=alt.Scale(domain=ydom)),
@@ -211,12 +216,17 @@ with c2:
     st.markdown("**Perfil calculado**")
     st.dataframe(pd.DataFrame([{
         "Estrato": k + 1, "Techo (m)": f["techo"], "Base (m)": f["base"],
-        "h sobre NF (m)": f["h_seco"], "h bajo NF (m)": f["h_sat"],
-        "η (rad)": f["estrato"].eta_usado, "σ'v techo (kPa)": f["sv_techo"]}
+        "Espesor seco, sobre NF (m)": f["h_seco"], "Espesor saturado, bajo NF (m)": f["h_sat"],
+        "η (rad)": f["estrato"].eta_usado, "σ'v techo (kPa)": f["sv_techo"],
+        "σ'v base (kPa)": f["sv_base"]}
         for k, f in enumerate(R["perfil"])]).style.format(precision=2), hide_index=True)
-    st.caption(f"Área de la punta Ap = π·D²/4 = **{datos.Ap:.4f} m²** · Perímetro C = π·D = "
-               f"**{datos.perimetro:.4f} m** · 15D = **{15*D:.2f} m** · "
-               f"Longitud para fuste Lf = mín(L, 15D) = **{datos.Lf:.2f} m**")
+    st.caption("Espesor seco: parte del estrato por encima del NF (usa γ). Espesor saturado: parte "
+               "por debajo del NF (usa γ' = γsat − γw). σ'v techo y σ'v base: esfuerzo efectivo "
+               "vertical en el techo y en la base de cada estrato.")
+    ap_txt, c_txt, d15 = ("π·D²/4", "π·D", "15D") if forma == "Circular" else ("B²", "4·B", "15B")
+    st.caption(f"Sección {forma.lower()} · Área de la punta Ap = {ap_txt} = **{datos.Ap:.4f} m²** · "
+               f"Perímetro C = {c_txt} = **{datos.perimetro:.4f} m** · {d15} = **{15*D:.2f} m** · "
+               f"Longitud para fuste Lf = mín(L, {d15}) = **{datos.Lf:.2f} m**")
 
 # =============================================================================
 # RESUMEN
@@ -235,7 +245,7 @@ t_fu, t_pu, t_adm, t_ase, t_gr, t_ec = st.tabs(
 
 # ---------------------------------------------------------------- FUSTE
 with t_fu:
-    st.markdown(f"Fuste calculado **por estrato**, solo hasta **Lf = mín(L, 15D) = {datos.Lf:.2f} m**. "
+    st.markdown(f"Fuste calculado **por estrato**, solo hasta **Lf = mín(L, {d15}) = {datos.Lf:.2f} m**. "
                 "Si un estrato queda por debajo de Lf, no aporta.")
     filas = [f for f in FU["filas"] if f["h"] > 0]
     comun = pd.DataFrame([{
@@ -292,7 +302,7 @@ with t_pu:
                        for m, v in PU["metodos"].items()])
     st.dataframe(tp.style.format({"Nc": "{:,.2f}", "Nq": "{:,.2f}", "Nγ": "{:,.2f}", "qp (kPa)": "{:,.1f}",
                                   "Qp = qp·Ap (kN)": "{:,.1f}"}, na_rep="—"), hide_index=True)
-    st.caption("Terzaghi: tabla de la diapositiva (base circular). Meyerhof: gráficas de cimentación profunda "
+    st.caption(f"Terzaghi: tabla de la diapositiva (base {forma.lower()}). Meyerhof: gráficas de cimentación profunda "
                "(β = +90°). Meyerhof simplificado: Meyerhof 1953, curva de pilote hincado o excavado. "
                "NSR-98 H.4-6 con Nq y Nc de Janbu.")
 
@@ -346,6 +356,7 @@ with t_ase:
         prm = pd.DataFrame([
             ("P (kN)", ASE["P"]), ("Es = Σ(E·h)/L (kPa)", ASE["Es"]), ("νs = Σ(ν·h)/L", ASE["nus"]),
             ("Eb = E del estrato de la punta (kPa)", ASE["Eb"]), ("Eb / Es", ASE["EbEs"]),
+            ("d = D" if forma == "Circular" else "d equivalente = √(4B²/π) (m)", ASE["d"]),
             ("L / d", ASE["LD"]), ("RA = Ap/(π·d²/4)", ASE["RA"]), ("K = Ep·RA / Es", ASE["K"]),
         ], columns=["Parámetro", "Valor"])
         st.markdown("**Parámetros**")
@@ -429,7 +440,9 @@ with t_ec:
     st.latex(r"\text{Janbu: } N_q=\left(\tan\phi+\sqrt{1+\tan^2\phi}\right)^2 e^{2\eta\tan\phi}"
              r"\qquad N_c=(N_q-1)\cot\phi \qquad \eta=\pi/3\ \text{(suelta)},\ 0.58\pi\ \text{(densa)}")
     st.markdown("#### Punta (en z = L)")
-    st.latex(r"\text{Terzaghi: } q_p=1.2\,c\,N_c+\sigma'_v N_q+0.6\,\gamma\,\tfrac{B}{2}\,N_\gamma")
+    st.latex(r"\text{Terzaghi: } q_p=1.2\,c\,N_c+\sigma'_v N_q+0.6\,\gamma\,\tfrac{B}{2}\,N_\gamma\ \text{(circular)}"
+             r"\qquad 0.8\,\gamma\,\tfrac{B}{2}\,N_\gamma\ \text{(cuadrada)}")
+    st.latex(r"\text{Cuadrada: } A_p=B^2 \qquad C=4B \qquad d_{eq}=\sqrt{4B^2/\pi}\ \text{(asentamiento)}")
     st.latex(r"\text{Meyerhof: } q_p=c\,N_{pc}+\sigma_o N_{pq}+\gamma\,\tfrac{B}{2}\,N_{p\gamma}")
     st.latex(r"\text{Meyerhof simplificado: } q_p=c\,N_c+K_s\,\sigma'_v\,N_q \qquad K_s=K_0")
     st.latex(r"\text{NSR-98 H.4-6: } q_o=c\,N_c+q_{vo}\,N_q\ \ \text{(Janbu)} \qquad Q_p=q_p\,A_p")
@@ -447,7 +460,7 @@ with t_ec:
 def excel_resultados():
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        pd.DataFrame([("D (m)", D), ("L (m)", L), ("Tipo", tipo), ("NF (m)", NF), ("γw", gw),
+        pd.DataFrame([("Forma", forma), ("D o B (m)", D), ("L (m)", L), ("Tipo", tipo), ("NF (m)", NF), ("γw", gw),
                       ("Método de fuste", metodo_fuste), ("Método de punta", metodo_punta),
                       ("FSp", FSp), ("FSs", FSs), ("FS mínimo", FSmin), ("Ep (kPa)", Ep)],
                      columns=["Dato", "Valor"]).to_excel(xw, sheet_name="Datos", index=False)
